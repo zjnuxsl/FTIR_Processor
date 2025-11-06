@@ -1,0 +1,20 @@
+# FTIR Processor Dependencies
+# Core scientific computing
+numpy>=1.19.0
+pandas>=1.0.0
+scipy>=1.5.0
+
+# Statistical analysis
+statsmodels>=0.12.0
+
+# Baseline correction
+pybaselines>=0.8.0
+
+# Visualization
+matplotlib>=3.0.0
+
+# GUI (usually included with Python)
+# tkinter - part of Python standard library
+
+# Optional: For enhanced exports
+openpyxl>=3.0.0  # Excel export support

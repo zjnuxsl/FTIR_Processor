@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "created_at": "2024-01-15T10:30:00",
+  "config": {
+    "y_label": "吸光度",
+    "smoothing": {
+      "method": "savgol",
+      "params": {
+        "window_length": "11",
+        "polyorder": "3"
+      }
+    },
+    "baseline": {
+      "method": "rubberband",
+      "params": {
+        "num_points": "100"
+      },
+      "data_source": "smoothed"
+    },
+    "peak_analysis": {
+      "threshold": "0.1",
+      "distance": "10",
+      "data_source": "corrected"
+    }
+  }
+}

@@ -4,30 +4,41 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from scipy.signal import savgol_filter, medfilt
+from scipy.signal import savgol_filter, medfilt, find_peaks
 from scipy.ndimage import gaussian_filter1d
 from statsmodels.nonparametric.smoothers_lowess import lowess
 from pybaselines import Baseline, polynomial, whittaker, spline
+import os
+import threading
+
+# 导入新模块
+try:
+    from config_manager import ConfigManager, ProcessingPipeline
+    from batch_processor import BatchProcessor, ExportManager
+    HAS_ENHANCED_FEATURES = True
+except ImportError:
+    HAS_ENHANCED_FEATURES = False
+    print("警告: 增强功能模块未找到，部分功能将不可用")
 
 class SpectralProcessorGUI:
     def __init__(self, root):
         self.root = root
-        
+
         # 设置matplotlib中文字体
         plt.rcParams['font.sans-serif'] = ['SimHei']
         plt.rcParams['axes.unicode_minus'] = False
-        
+
         # 初始化数据
         self.x_data = None
         self.y_data = None
         self.smoothed_data = None
         self.corrected_data = None
         self.baseline_fitter = Baseline()
-        
+
         # 初始化变量
         self.data_source_var = tk.StringVar(value="original")
         self.y_label_var = tk.StringVar(value="吸光度")
-        
+
         # 初始化图形属性
         self.smooth_ax1 = None
         self.smooth_ax2 = None
@@ -35,10 +46,60 @@ class SpectralProcessorGUI:
         self.baseline_ax2 = None
         self.smooth_canvas = None
         self.baseline_canvas = None
-        
+
+        # 初始化增强功能
+        if HAS_ENHANCED_FEATURES:
+            self.config_manager = ConfigManager()
+            self.export_manager = ExportManager()
+        else:
+            self.config_manager = None
+            self.export_manager = None
+
+        # 创建菜单栏
+        self.create_menu()
+
         # 创建主框架
         self.create_main_frame()
-        
+
+    def create_menu(self):
+        """创建菜单栏"""
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+
+        # 文件菜单
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="文件", menu=file_menu)
+        file_menu.add_command(label="加载数据", command=self.load_data)
+        file_menu.add_separator()
+
+        if HAS_ENHANCED_FEATURES:
+            file_menu.add_command(label="保存配置", command=self.save_config)
+            file_menu.add_command(label="加载配置", command=self.load_config)
+            file_menu.add_separator()
+            file_menu.add_command(label="批量处理", command=self.open_batch_dialog)
+            file_menu.add_separator()
+
+        file_menu.add_command(label="退出", command=self.root.quit)
+
+        # 导出菜单
+        export_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="导出", menu=export_menu)
+        export_menu.add_command(label="导出平滑数据(CSV)", command=self.export_smooth_data)
+        export_menu.add_command(label="导出基线校正数据(CSV)", command=self.export_baseline_data)
+
+        if HAS_ENHANCED_FEATURES:
+            export_menu.add_separator()
+            export_menu.add_command(label="导出完整报告(Excel)", command=self.export_full_report_excel)
+            export_menu.add_command(label="导出数据(带元数据)", command=self.export_with_metadata)
+
+        # 帮助菜单
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="帮助", menu=help_menu)
+        help_menu.add_command(label="平滑方法说明", command=self.show_smoothing_help)
+        help_menu.add_command(label="基线校正说明", command=self.show_baseline_help)
+        help_menu.add_separator()
+        help_menu.add_command(label="关于", command=self.show_about)
+
     def update_plots(self):
         """更新所有图形的 y 轴标题"""
         y_label = self.y_label_var.get()
@@ -1201,6 +1262,373 @@ class SpectralProcessorGUI:
     def on_peak_select(self, event):
         """当峰列表选择改变时更新图形"""
         self.update_peak_plot()
+
+    # ========== 新增功能方法 ==========
+
+    def save_config(self):
+        """保存当前配置"""
+        if not HAS_ENHANCED_FEATURES:
+            messagebox.showwarning("警告", "增强功能模块未安装")
+            return
+
+        try:
+            file_path = filedialog.asksaveasfilename(
+                title="保存配置",
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+
+            if file_path:
+                config = ConfigManager.create_config_from_gui(self)
+                self.config_manager.save_config(config, file_path)
+                messagebox.showinfo("成功", "配置保存成功！")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"保存配置失败：{str(e)}")
+
+    def load_config(self):
+        """加载配置"""
+        if not HAS_ENHANCED_FEATURES:
+            messagebox.showwarning("警告", "增强功能模块未安装")
+            return
+
+        try:
+            file_path = filedialog.askopenfilename(
+                title="加载配置",
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+            )
+
+            if file_path:
+                config = self.config_manager.load_config(file_path)
+                ConfigManager.apply_config_to_gui(config, self)
+                messagebox.showinfo("成功", "配置加载成功！")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"加载配置失败：{str(e)}")
+
+    def open_batch_dialog(self):
+        """打开批量处理对话框"""
+        if not HAS_ENHANCED_FEATURES:
+            messagebox.showwarning("警告", "增强功能模块未安装")
+            return
+
+        BatchDialog(self.root, self)
+
+    def export_full_report_excel(self):
+        """导出完整报告到Excel"""
+        if not HAS_ENHANCED_FEATURES:
+            messagebox.showwarning("警告", "增强功能模块未安装")
+            return
+
+        if self.x_data is None:
+            messagebox.showerror("错误", "没有可导出的数据")
+            return
+
+        try:
+            file_path = filedialog.asksaveasfilename(
+                title="导出完整报告",
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+            )
+
+            if file_path:
+                # 准备峰数据
+                peaks_data = None
+                if hasattr(self, 'peaks_listbox') and self.peaks_listbox.size() > 0:
+                    peaks = []
+                    heights = []
+                    for i in range(self.peaks_listbox.size()):
+                        parts = self.peaks_listbox.get(i).split()
+                        peaks.append(float(parts[0]))
+                        heights.append(float(parts[1]))
+                    peaks_data = {
+                        "峰位置(cm^-1)": peaks,
+                        "峰高度": heights
+                    }
+
+                # 获取当前配置
+                config = ConfigManager.create_config_from_gui(self)
+
+                # 导出
+                self.export_manager.export_to_excel(
+                    file_path,
+                    self.x_data,
+                    self.y_data,
+                    self.smoothed_data,
+                    self.corrected_data,
+                    peaks_data,
+                    config
+                )
+
+                messagebox.showinfo("成功", f"完整报告已导出到：\n{file_path}")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"导出失败：{str(e)}")
+
+    def export_with_metadata(self):
+        """导出带元数据的CSV文件"""
+        if not HAS_ENHANCED_FEATURES:
+            messagebox.showwarning("警告", "增强功能模块未安装")
+            return
+
+        if self.x_data is None:
+            messagebox.showerror("错误", "没有可导出的数据")
+            return
+
+        try:
+            file_path = filedialog.asksaveasfilename(
+                title="导出数据（带元数据）",
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+            )
+
+            if file_path:
+                config = ConfigManager.create_config_from_gui(self)
+                self.export_manager.export_with_metadata(
+                    file_path,
+                    self.x_data,
+                    self.y_data,
+                    self.smoothed_data,
+                    self.corrected_data,
+                    config
+                )
+
+                messagebox.showinfo("成功", f"数据已导出到：\n{file_path}")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"导出失败：{str(e)}")
+
+    def show_about(self):
+        """显示关于对话框"""
+        about_text = """
+FTIR 光谱处理程序
+版本: 2.0 (增强版)
+
+作者: zjnuxsl
+邮箱: sl-xiao@zjnu.cn
+
+功能特性:
+• 5种平滑方法
+• 5种基线校正方法
+• 特征峰分析
+• 批量文件处理
+• 配置保存/加载
+• 多格式导出
+
+© 2024 All Rights Reserved
+        """
+
+        messagebox.showinfo("关于", about_text.strip())
+
+
+class BatchDialog:
+    """批量处理对话框"""
+
+    def __init__(self, parent, main_gui):
+        self.main_gui = main_gui
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("批量处理")
+        self.dialog.geometry("600x500")
+
+        # 文件列表
+        list_frame = ttk.LabelFrame(self.dialog, text="待处理文件")
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 创建列表框和滚动条
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.file_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set)
+        self.file_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        scrollbar.config(command=self.file_listbox.yview)
+
+        # 文件路径存储
+        self.file_paths = []
+
+        # 按钮区域
+        btn_frame = ttk.Frame(self.dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Button(btn_frame, text="添加文件", command=self.add_files).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="移除选中", command=self.remove_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="清空列表", command=self.clear_list).pack(side=tk.LEFT, padx=5)
+
+        # 输出目录选择
+        output_frame = ttk.LabelFrame(self.dialog, text="输出目录")
+        output_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.output_dir_var = tk.StringVar()
+        ttk.Entry(output_frame, textvariable=self.output_dir_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+        ttk.Button(output_frame, text="选择目录", command=self.select_output_dir).pack(side=tk.RIGHT, padx=5, pady=5)
+
+        # 进度显示
+        progress_frame = ttk.LabelFrame(self.dialog, text="处理进度")
+        progress_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.progress_var = tk.StringVar(value="就绪")
+        ttk.Label(progress_frame, textvariable=self.progress_var).pack(padx=5, pady=5)
+
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress_bar.pack(fill=tk.X, padx=5, pady=5)
+
+        # 开始处理按钮
+        control_frame = ttk.Frame(self.dialog)
+        control_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(control_frame, text="开始批量处理", command=self.start_batch_processing).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="关闭", command=self.dialog.destroy).pack(side=tk.RIGHT, padx=5)
+
+    def add_files(self):
+        """添加文件"""
+        files = filedialog.askopenfilenames(
+            title="选择数据文件",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        for file in files:
+            if file not in self.file_paths:
+                self.file_paths.append(file)
+                self.file_listbox.insert(tk.END, os.path.basename(file))
+
+    def remove_selected(self):
+        """移除选中文件"""
+        selection = self.file_listbox.curselection()
+        if selection:
+            index = selection[0]
+            self.file_listbox.delete(index)
+            self.file_paths.pop(index)
+
+    def clear_list(self):
+        """清空列表"""
+        self.file_listbox.delete(0, tk.END)
+        self.file_paths = []
+
+    def select_output_dir(self):
+        """选择输出目录"""
+        directory = filedialog.askdirectory(title="选择输出目录")
+        if directory:
+            self.output_dir_var.set(directory)
+
+    def start_batch_processing(self):
+        """开始批量处理"""
+        if not self.file_paths:
+            messagebox.showwarning("警告", "请先添加要处理的文件")
+            return
+
+        if not self.output_dir_var.get():
+            messagebox.showwarning("警告", "请选择输出目录")
+            return
+
+        # 获取当前配置
+        config = ConfigManager.create_config_from_gui(self.main_gui)
+
+        # 准备处理函数
+        processing_functions = {
+            'smoothing': self._create_smoothing_function(),
+            'baseline': self._create_baseline_function(),
+            'peak_analysis': self._create_peak_analysis_function()
+        }
+
+        # 创建批量处理器
+        processor = BatchProcessor(config, processing_functions)
+
+        # 进度回调
+        def progress_callback(current, total, filename):
+            self.progress_var.set(f"处理中: {filename} ({current}/{total})")
+            self.progress_bar['value'] = (current / total) * 100
+            self.dialog.update()
+
+        # 在单独线程中处理
+        def process_thread():
+            try:
+                summary = processor.process_files(
+                    self.file_paths,
+                    self.output_dir_var.get(),
+                    progress_callback
+                )
+
+                # 保存摘要
+                processor.save_summary(self.output_dir_var.get())
+
+                # 显示结果
+                self.progress_var.set(f"完成！成功: {summary['successful']}, 失败: {summary['failed']}")
+                messagebox.showinfo(
+                    "批量处理完成",
+                    f"处理完成！\n\n成功: {summary['successful']}\n失败: {summary['failed']}\n\n结果已保存到: {self.output_dir_var.get()}"
+                )
+
+            except Exception as e:
+                messagebox.showerror("错误", f"批量处理失败：{str(e)}")
+                self.progress_var.set("错误")
+
+        thread = threading.Thread(target=process_thread, daemon=True)
+        thread.start()
+
+    def _create_smoothing_function(self):
+        """创建平滑处理函数"""
+        def smooth_func(x_data, y_data, config):
+            method = config['method']
+            params = config['params']
+
+            if method == "savgol":
+                return savgol_filter(y_data, int(params['window_length']), int(params['polyorder']))
+            elif method == "moving_average":
+                window_length = int(params['window_length'])
+                kernel = np.ones(window_length) / window_length
+                return np.convolve(y_data, kernel, mode='same')
+            elif method == "gaussian":
+                return gaussian_filter1d(y_data, float(params['sigma']))
+            elif method == "median":
+                return medfilt(y_data, int(params['window_length']))
+            elif method == "lowess":
+                return lowess(y_data, x_data, frac=float(params['frac']), it=int(params['it']), return_sorted=False)
+
+            return y_data
+
+        return smooth_func
+
+    def _create_baseline_function(self):
+        """创建基线校正函数"""
+        def baseline_func(x_data, y_data, config):
+            method = config['method']
+            params = config['params']
+            baseline_fitter = Baseline()
+
+            if method == "rubberband":
+                baseline = baseline_fitter.rubberband(y_data, num_knots=int(params['num_points']))[0]
+            elif method == "modpoly":
+                baseline = polynomial.modpoly(y_data, poly_order=int(params['poly_order']))[0]
+            elif method == "imodpoly":
+                baseline = baseline_fitter.imodpoly(y_data, poly_order=int(params['poly_order']), max_iter=int(params['num_iter']))[0]
+            elif method == "asls":
+                baseline = whittaker.asls(y_data, lam=float(params['lam']), p=float(params['p']))[0]
+            elif method == "mixture_model":
+                baseline = spline.mixture_model(y_data, num_knots=int(params['num_knots']))[0]
+            else:
+                baseline = np.zeros_like(y_data)
+
+            return y_data - baseline
+
+        return baseline_func
+
+    def _create_peak_analysis_function(self):
+        """创建峰分析函数"""
+        def peak_func(x_data, y_data, config):
+            threshold = float(config['threshold'])
+            distance = int(config['distance'])
+
+            peaks, properties = find_peaks(y_data, height=threshold, distance=distance)
+
+            if len(peaks) > 0:
+                return {
+                    "峰位置(cm^-1)": [x_data[p] for p in peaks],
+                    "峰高度": [y_data[p] for p in peaks]
+                }
+
+            return None
+
+        return peak_func
+
 
 # 在文件末尾添加以下代码
 def main():
